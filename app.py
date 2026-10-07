@@ -8,14 +8,22 @@ import random
 
 st.set_page_config(page_title="看護学生向けフィジカルアセスメント 無限問題集", layout="wide")
 
+# ★ラジオボタンの文字サイズを問題文(H3)と同じ大きさに拡大するCSS
+st.markdown("""
+<style>
+div[role="radiogroup"] p {
+    font-size: 1.5rem !important;
+    font-weight: bold !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ==========================================
 # 1. 初期設定（APIキー・Firebase接続）
 # ==========================================
-# クラウド環境（Secrets設定あり）かローカル環境かを自動判定して安全にキーを読み込む
 if "GEMINI_API_KEY" in st.secrets:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 else:
-    # ローカル用フォールバック（GitHubへのアップロード用に空欄にしています）
     GEMINI_API_KEY = ""
 
 genai.configure(api_key=GEMINI_API_KEY)
@@ -81,6 +89,9 @@ if "used_pre_made" not in st.session_state:
     st.session_state.used_pre_made = []
 if "last_settings" not in st.session_state:
     st.session_state.last_settings = {}
+# ★ ラジオボタンを確実にリセットするための固有キー（通し番号）
+if "q_key" not in st.session_state:
+    st.session_state.q_key = 0
 
 def generate_quiz_via_ai(domain, sub_domain, difficulty):
     source_text = load_knowledge_base(domain)
@@ -135,12 +146,18 @@ if mode == "学生用（クイズ演習）":
 
     col_id, col_name = st.columns([1, 1])
     with col_id:
-        student_id = st.text_input("学籍番号を入力してください", value=st.session_state.student_id)
+        student_id = st.text_input("学籍番号を入力してください（半角数字7桁）", value=st.session_state.student_id)
     with col_name:
         student_name = st.text_input("氏名（またはニックネーム）")
 
+    # ★ 学籍番号が入力されていない場合のストップ処理
     if not student_id:
         st.warning("演習を開始するには学籍番号を入力してください。")
+        st.stop()
+        
+    # ★ 学籍番号が「7文字」かつ「すべて数字」かどうかの厳密なチェック
+    if not (len(student_id) == 7 and student_id.isdigit()):
+        st.error("エラー：学籍番号は「半角数字7桁」で入力してください。")
         st.stop()
 
     st.session_state.student_id = student_id
@@ -191,10 +208,10 @@ if mode == "学生用（クイズ演習）":
                     and q["question"] not in st.session_state.used_pre_made
                 ]
 
+                # ★ 新しい問題を生成する際に状態をリセットし、ラジオボタンの固有キーをカウントアップする
                 st.session_state.answered = False
                 st.session_state.is_correct = False
-                if "quiz_choice" in st.session_state:
-                    del st.session_state["quiz_choice"]
+                st.session_state.q_key += 1
 
                 if available_pre_made:
                     selected_q = random.choice(available_pre_made)
@@ -225,7 +242,12 @@ if mode == "学生用（クイズ演習）":
         st.markdown(f"### Q. {q['question']}")
         
         is_disabled = st.session_state.answered
-        choice = st.radio("選択肢を選んでください：", q["options"], key="quiz_choice", index=None, disabled=is_disabled, horizontal=True)
+        
+        # ★ 「選択肢を選んでください」の文字を問題文と同サイズ(H3)に拡大
+        st.markdown("### 選択肢を選んでください：")
+        
+        # ★ ラジオボタン自体のラベルは隠し、固有のキー(q_key)を割り当てることで確実にブランク状態にする
+        choice = st.radio("選択肢", q["options"], key=f"quiz_choice_{st.session_state.q_key}", index=None, disabled=is_disabled, horizontal=True, label_visibility="collapsed")
 
         if not is_disabled:
             if st.button("回答を送信する") and choice:
