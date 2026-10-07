@@ -5,7 +5,6 @@ from firebase_admin import credentials, firestore
 import json
 import os
 import random
-import re
 
 st.set_page_config(page_title="基礎看護技術論Ⅲ 無限問題集", layout="wide")
 
@@ -41,29 +40,20 @@ db = firestore.client()
 # 2. 知識データベース（即時出題バンク）
 # ==========================================
 PRE_MADE_QUESTIONS = [
-    # 解剖・生理（4問）
     {"sub_domain": "解剖・生理", "question": "右主気管支は左主気管支よりも細く長いため、誤嚥性肺炎は左肺に起こりやすい。", "options": ["○", "×"], "answer_index": 1, "explanation": "右主気管支の方が「太く短く」、分岐角度が小さい（約25度）ため、誤嚥したものは右に入りやすく、誤嚥性肺炎は右肺に起こりやすいです。"},
     {"sub_domain": "解剖・生理", "question": "腹式呼吸は安静時の呼吸の大部分を担い、胸式呼吸よりも1回換気量が多くなる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。横隔膜の収縮による腹式呼吸は安静時の主な呼吸であり、胸式呼吸よりも多くの換気量を得られます。"},
     {"sub_domain": "解剖・生理", "question": "背面から見える肺の大部分は上葉であるため、背部の観察では上葉を意識することが重要である。", "options": ["○", "×"], "answer_index": 1, "explanation": "背面から見える肺の大部分は「下葉」です。そのため、背部の聴診や打診では主に下葉の状態を観察しています。"},
     {"sub_domain": "解剖・生理", "question": "PaO2（動脈血酸素分圧）が60Torr以下、またはSpO2が約90%の状態は呼吸不全を意味する。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。PaO2の基準値は80〜100Torrであり、60Torrを下回る（SpO2約90%以下）と呼吸不全と定義されます。"},
-    
-    # 体表解剖（5問）
     {"sub_domain": "体表解剖", "question": "胸骨角（ルイ角）は第1肋骨の付着部であり、肋骨・肋間を数える起点となる。", "options": ["○", "×"], "answer_index": 1, "explanation": "胸骨角は「第2肋骨」の付着部です。第1肋骨は鎖骨の下にあり触れないため、ここを起点として肋骨を数えます。"},
     {"sub_domain": "体表解剖", "question": "前面の基準線は、胸骨中線・胸骨線・鎖骨中線の3つである。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。これらを基準線として、肋骨や肋間の番号と組み合わせて部位を表現します。"},
     {"sub_domain": "体表解剖", "question": "首を前に曲げたときに最も突出するのは、第1胸椎棘突起である。", "options": ["○", "×"], "answer_index": 1, "explanation": "最も突出するのは「第7頸椎棘突起」です。そのすぐ下が第1胸椎になります。"},
     {"sub_domain": "体表解剖", "question": "気管分岐部は、背面から見ると第4胸椎棘突起の高さに位置している。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。前面では胸骨角の高さ、背面では第4胸椎棘突起の高さが気管分岐部の目安となります。"},
     {"sub_domain": "体表解剖", "question": "肺尖部は鎖骨内側1/3より上方約3cmの位置にある。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。肺の頂上部分は鎖骨よりも上に飛び出しているため、鎖骨上窩の聴診も重要になります。"},
-    
-    # 問診・視診（3問）
     {"sub_domain": "問診・視診", "question": "起座呼吸は、横になると苦しく座ると楽になる状態で、心不全や喘息などが原因で起こる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。心不全などで肺にうっ血がある場合、横になると静脈還流量が増えて呼吸が苦しくなるため、起き上がることで呼吸を楽にしようとします。"},
     {"sub_domain": "問診・視診", "question": "チェーンストークス呼吸は、深く大きな規則的な呼吸が続く異常呼吸であり、糖尿病性ケトアシドーシスでみられる。", "options": ["○", "×"], "answer_index": 1, "explanation": "それは「クスマウル呼吸」の説明です。チェーンストークス呼吸は、無呼吸と深浅の周期を繰り返す呼吸で、心不全や脳障害などでみられます。"},
     {"sub_domain": "問診・視診", "question": "チアノーゼは口唇や爪床が青紫色になるサインであるが、貧血の患者では現れにくい。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。チアノーゼは還元ヘモグロビンが一定量以上増えることで現れるため、もともとヘモグロビンが少ない貧血状態では出現しにくくなります。"},
-    
-    # 触診・打診（2問）
     {"sub_domain": "触診・打診", "question": "背部での胸郭の可動性の触診において、正常であれば深吸気時に左右の母指の間は約4cm広がる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。第10肋骨付近で左右の母指を合わせ、深吸気で対称に約4cm広がるのが正常な所見です。"},
     {"sub_domain": "触診・打診", "question": "正常な肺野を打診すると、鈍くつまったような濁音が聴こえる。", "options": ["○", "×"], "answer_index": 1, "explanation": "正常な肺野は空気を多く含むため、響きのある低い「共鳴音（清音）」が聴こえます。濁音は肺炎や胸水貯留などで聴こえます。"},
-    
-    # 聴診（5問に増量）
     {"sub_domain": "聴診", "question": "捻髪音（細かい断続性副雑音）は「ブクブク」と聴こえ、気道内に分泌物が溜まっている状態で聴取される。", "options": ["○", "×"], "answer_index": 1, "explanation": "分泌物が溜まっている状態で聴こえる「ブクブク」という音は「水泡音（粗い断続性副雑音）」です。捻髪音は「パリパリ」と聴こえ、間質性肺炎などで聴取されます。"},
     {"sub_domain": "聴診", "question": "ストライダーは吸気時に聴こえる高調性の「ゼーゼー」という音で、上気道の狭窄を示す緊急所見である。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。喉頭浮腫や気道異物などによる上気道の狭窄を示しており、窒息の恐れがあるため迅速な対応が必要です。"},
     {"sub_domain": "聴診", "question": "呼吸音の聴診は、低音を聴き取るためベル型聴診器を皮膚に軽く当てて行う。", "options": ["○", "×"], "answer_index": 1, "explanation": "呼吸音は高音であるため「膜型聴診器」を使用します。また、皮膚に跡が残るくらいの強さでしっかりと押し当てて聴診します。"},
@@ -73,7 +63,6 @@ PRE_MADE_QUESTIONS = [
 
 @st.cache_data
 def load_knowledge_base(domain):
-    # ファイル名が存在すれば読み込む
     file_map = {
         "呼吸器系のフィジカルアセスメント": "kokyu.txt",
         "循環器系のフィジカルアセスメント": "junkanki.txt"
@@ -112,59 +101,53 @@ if "q_key" not in st.session_state:
 
 def generate_quiz_via_ai(domain, sub_domain, difficulty):
     source_text = load_knowledge_base(domain)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    prompt = f"""
-    あなたは優秀な看護教育の専門家です。以下の【参考資料】に記載されている事実のみに基づいて、○×問題（正誤問題）をまとめて「3問」作成してください。
-    外部の知識は絶対に混ぜないでください。資料の文章量が少ない場合は、少し視点を変えて必ず3問作成してください。
-
-    【条件】
-    - 出題領域: {domain}
-    - 出題範囲: {sub_domain}（※「すべて」以外が指定された場合は該当内容を重点的に出題）
-    - 難易度: {difficulty}
-    - 選択肢は必ず「○」と「×」の2つだけにしてください。
-    - 解説は要点を絞って短く簡潔に（2〜3文程度で）作成してください。
-
-    【出力フォーマット】（JSON形式の配列のみ）
-    [
-      {{
-        "question": "1問目の問題文",
-        "options": ["○", "×"],
-        "answer_index": 正解の番号(0または1),
-        "explanation": "1問目の解説文"
-      }},
-      {{
-        "question": "2問目の問題文",
-        "options": ["○", "×"],
-        "answer_index": 正解の番号(0または1),
-        "explanation": "2問目の解説文"
-      }},
-      {{
-        "question": "3問目の問題文",
-        "options": ["○", "×"],
-        "answer_index": 正解の番号(0または1),
-        "explanation": "3問目の解説文"
-      }}
-    ]
-
-    【参考資料】
-    {source_text}
-    """
-    response = model.generate_content(prompt)
-    clean_text = response.text.strip().replace("```json", "").replace("```", "")
-    
     try:
-        match = re.search(r'\[.*\]', clean_text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        else:
-            return json.loads(clean_text)
-    except Exception as e:
-        return [{
-            "question": f"【AI生成エラー】別の問題を出題します。「次の問題」ボタンを押してください。",
+        # ★ JSON専用モードを明示的に指定してエラーを激減させる
+        model = genai.GenerativeModel(
+            "gemini-1.5-flash",
+            generation_config={"response_mime_type": "application/json"}
+        )
+        prompt = f"""
+        あなたは優秀な看護教育の専門家です。以下の【参考資料】に記載されている事実のみに基づいて、○×問題（正誤問題）をまとめて「3問」作成してください。
+        外部の知識は絶対に混ぜないでください。資料の文章量が少ない場合は、少し視点を変えて必ず3問作成してください。
+
+        【条件】
+        - 出題領域: {domain}
+        - 出題範囲: {sub_domain}（※「すべて」以外が指定された場合は該当内容を重点的に出題）
+        - 難易度: {difficulty}
+        - 選択肢は必ず「○」と「×」の2つだけにしてください。
+        - 解説は要点を絞って短く簡潔に（2〜3文程度で）作成してください。
+
+        【出力フォーマット】（以下のJSONスキーマに従った配列で出力）
+        [
+          {{
+            "question": "1問目の問題文",
             "options": ["○", "×"],
-            "answer_index": 0,
-            "explanation": "資料の該当箇所が少ないため生成に失敗しました。"
-        }]
+            "answer_index": 正解の番号(0または1),
+            "explanation": "1問目の解説文"
+          }},
+          {{
+            "question": "2問目の問題文",
+            "options": ["○", "×"],
+            "answer_index": 正解の番号(0または1),
+            "explanation": "2問目の解説文"
+          }},
+          {{
+            "question": "3問目の問題文",
+            "options": ["○", "×"],
+            "answer_index": 正解の番号(0または1),
+            "explanation": "3問目の解説文"
+          }}
+        ]
+
+        【参考資料】
+        {source_text}
+        """
+        response = model.generate_content(prompt)
+        return json.loads(response.text)
+    except Exception as e:
+        # エラー時は None を返してUI側で正しく処理する
+        return None
 
 # ==========================================
 # 4. UI（画面構成）
@@ -236,8 +219,10 @@ if mode == "学生用（クイズ演習）":
                     and q["question"] not in st.session_state.used_pre_made
                 ]
 
+                # ★ここで必ず画面上の古い問題をリセットし、ラジオボタンも初期化する
                 st.session_state.answered = False
                 st.session_state.is_correct = False
+                st.session_state.current_question = None
                 st.session_state.q_key += 1
 
                 if available_pre_made:
@@ -252,14 +237,15 @@ if mode == "学生用（クイズ演習）":
                 else:
                     if not st.session_state.question_pool:
                         with st.spinner("AIが新しい問題セットを作成中...（初回のみ数秒かかります）"):
-                            try:
-                                new_questions = generate_quiz_via_ai(domain, sub_domain, difficulty)
+                            new_questions = generate_quiz_via_ai(domain, sub_domain, difficulty)
+                            if new_questions:
                                 if isinstance(new_questions, list):
                                     st.session_state.question_pool = new_questions
                                 else:
                                     st.session_state.question_pool = [new_questions]
-                            except Exception as e:
-                                st.error("問題の生成に失敗しました。もう一度ボタンを押してください。")
+                            else:
+                                # 生成失敗時は古い問題を消したままエラー文のみ表示
+                                st.error("⚠️ AIサーバーの混雑、または資料の該当箇所が少ないため生成に失敗しました。もう一度「次の問題を生成する」を押してください。")
 
                     if st.session_state.question_pool:
                         st.session_state.current_question = st.session_state.question_pool.pop(0)
