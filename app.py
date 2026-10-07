@@ -21,11 +21,9 @@ else:
 genai.configure(api_key=GEMINI_API_KEY)
 
 if not firebase_admin._apps:
-    if "firebase" in st.secrets:
-        # クラウド環境: Streamlitの安全な保管庫から読み込む
-        cred = credentials.Certificate(dict(st.secrets["firebase"]))
+    if "FIREBASE_JSON" in st.secrets:
+        cred = credentials.Certificate(json.loads(st.secrets["FIREBASE_JSON"]))
     else:
-        # ローカル環境: jsonファイルから読み込む
         cred = credentials.Certificate("firebase_key.json")
     firebase_admin.initialize_app(cred)
 db = firestore.client()
