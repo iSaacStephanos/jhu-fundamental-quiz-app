@@ -6,6 +6,7 @@ import os
 import re
 import time
 import random
+import threading
 
 st.set_page_config(page_title="基礎看護技術論Ⅲ 無限問題集", layout="wide")
 
@@ -162,30 +163,11 @@ def build_source_text(domain, sub_domain):
 
 
 # ==========================================
-# 3. セッション管理・AI問題生成ロジック
+# 3-A. AI問題生成（★Streamlit に一切依存しない純粋な処理）
 # ==========================================
-DEFAULTS = {
-    "current_question": None,
-    "answered": False,
-    "student_id": "",
-    "is_correct": False,
-    "question_pool": [],
-    "used_pre_made": [],
-    "asked_questions": [],   # ★重複出題を避けるための出題履歴（AI生成分も含む）
-    "last_settings": {},
-    "q_key": 0,
-    "last_ai_error": "",     # ★失敗理由を画面に出せるように保持
-    "resolved_model": "",
-    "pending_next": False,
-}
-for _k, _v in DEFAULTS.items():
-    if _k not in st.session_state:
-        st.session_state[_k] = _v
-
-
-# --- Gemini SDK アダプタ -----------------------------------------------------
-# google-generativeai（旧SDK）は非推奨になり、新しい google-genai に統合された。
-# どちらが入っていても動くようにし、モデル名も「実際に使えるもの」を自動解決する。
+# ここから下の関数は、バックグラウンドスレッドから呼ばれる。
+# スレッド内で st.* に触ると ScriptRunContext が無いため警告・不具合になるので、
+# このブロックでは st を一切使わないこと。
 MODEL_PREFERENCE = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -212,47 +194,55 @@ QUIZ_SCHEMA = {
     "required": ["questions"],
 }
 
+# モデル名の解決結果はプロセス全体で共有する（session_state を使わない）
+_MODEL_LOCK = threading.Lock()
+RESOLVED_MODEL = {"name": ""}
 
-def _new_sdk_client():
-    from google import genai  # google-genai
-    return genai.Client(api_key=GEMINI_API_KEY)
 
+def _resolve_model(client):
+    """実際に使えるモデル名を1つ決める。優先リスト → 一覧から flash を探す。"""
+    with _MODEL_LOCK:
+        if RESOLVED_MODEL["name"]:
+            return RESOLVED_MODEL["name"]
 
-def _resolve_model_new(client):
-    """使えるモデル名を1つ決める。優先リスト → 一覧から flash を探す。"""
-    if st.session_state.resolved_model:
-        return st.session_state.resolved_model
     names = []
     try:
         for m in client.models.list():
-            name = getattr(m, "name", "") or ""
-            names.append(name.split("/")[-1])
+            raw = getattr(m, "name", "") or ""
+            names.append(raw.split("/")[-1])
     except Exception:
         names = []
+
+    chosen = None
     for want in MODEL_PREFERENCE:
         if not names or want in names:
-            st.session_state.resolved_model = want
-            return want
-    flashes = [n for n in names if "flash" in n and "embedding" not in n]
-    chosen = sorted(flashes, reverse=True)[0] if flashes else MODEL_PREFERENCE[0]
-    st.session_state.resolved_model = chosen
+            chosen = want
+            break
+    if chosen is None:
+        flashes = [n for n in names if "flash" in n and "embedding" not in n]
+        chosen = sorted(flashes, reverse=True)[0] if flashes else MODEL_PREFERENCE[0]
+
+    with _MODEL_LOCK:
+        RESOLVED_MODEL["name"] = chosen
     return chosen
 
 
-def _call_gemini(prompt):
-    """プロンプトを投げて、生のテキスト（JSON文字列）を返す。
+def _call_gemini(api_key, prompt):
+    """プロンプトを投げて生のテキスト（JSON文字列）を返す。
 
-    新SDKの呼び出し形（interactions / models）と旧SDKを順に試す。
-    どれも失敗した場合は例外を投げ、呼び出し側で理由を表示する。
+    google-generativeai（旧SDK）は非推奨になり google-genai に統合されたため、
+    新SDKの2つの呼び出し形 → 旧SDK の順に試す。
+    すべて失敗した場合は、理由をまとめて例外として投げる。
     """
     errors = []
 
     # (1) 新SDK: google-genai
     try:
-        client = _new_sdk_client()
-        model = _resolve_model_new(client)
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        model = _resolve_model(client)
 
-        # (1-a) Interactions API
+        # (1-a) Interactions API（現行の推奨形）
         try:
             interaction = client.interactions.create(
                 model=model,
@@ -291,10 +281,10 @@ def _call_gemini(prompt):
     except Exception as e:
         errors.append(f"google-genai 利用不可: {type(e).__name__}: {e}")
 
-    # (2) 旧SDK: google-generativeai
+    # (2) 旧SDK: google-generativeai（入っていれば）
     try:
         import google.generativeai as old_genai
-        old_genai.configure(api_key=GEMINI_API_KEY)
+        old_genai.configure(api_key=api_key)
         last = None
         for name in MODEL_PREFERENCE:
             try:
@@ -307,7 +297,8 @@ def _call_gemini(prompt):
                 )
                 resp = model.generate_content(prompt)
                 if getattr(resp, "text", None):
-                    st.session_state.resolved_model = name + "（旧SDK）"
+                    with _MODEL_LOCK:
+                        RESOLVED_MODEL["name"] = name + "（旧SDK）"
                     return resp.text
                 last = f"{name}: text が空"
             except Exception as e:
@@ -319,7 +310,6 @@ def _call_gemini(prompt):
     raise RuntimeError(" / ".join(errors))
 
 
-# --- 応答の正規化・検証 ------------------------------------------------------
 def normalize_text(s):
     """重複判定用に、記号や空白の揺れを落とした比較キーを作る。"""
     s = re.sub(r"\s+", "", str(s))
@@ -400,24 +390,17 @@ def drop_already_asked(items, asked_keys):
     return out
 
 
-def generate_quiz_via_ai(domain, sub_domain, difficulty, avoid, attempts=3):
-    """AIで問題セットを作る。成功なら (問題リスト, "")、失敗なら ([], 理由)。"""
-    source_text = build_source_text(domain, sub_domain)
-    if source_text == "準備中":
-        return [], "資料ファイルが見つかりません。"
-    if not GEMINI_API_KEY:
-        return [], "GEMINI_API_KEY が設定されていません（Streamlit の Secrets を確認してください）。"
-
+def build_prompt(domain, sub_domain, difficulty, source_text, avoid_questions, n=3):
     avoid_block = ""
-    if avoid:
-        recent = avoid[-20:]
-        avoid_block = "\n".join(f"- {q}" for q in recent)
+    if avoid_questions:
+        recent = avoid_questions[-25:]
+        listed = "\n".join(f"- {q}" for q in recent)
         avoid_block = (
             "\n【すでに出題した問題（内容が重なるものは絶対に避け、"
-            "別の文・別の着眼点で作ること）】\n" + avoid_block
+            "別の文・別の着眼点で作ること）】\n" + listed
         )
 
-    prompt = f"""あなたは優秀な看護教育の専門家です。以下の【参考資料】に記載されている事実のみに基づいて、○×問題（正誤問題）を「3問」作成してください。
+    return f"""あなたは優秀な看護教育の専門家です。以下の【参考資料】に記載されている事実のみに基づいて、○×問題（正誤問題）を「{n}問」作成してください。
 外部の知識は絶対に混ぜないでください。
 
 【条件】
@@ -425,9 +408,9 @@ def generate_quiz_via_ai(domain, sub_domain, difficulty, avoid, attempts=3):
 - 出題範囲: {sub_domain}
 - 難易度: {difficulty}
 - 選択肢は「○」と「×」の2つで固定です。answer_index は 0（○が正しい）または 1（×が正しい）の整数で答えてください。
-- 3問のうち、少なくとも1問は answer_index を 1（誤りの文）にしてください。
+- {n}問のうち、少なくとも1問は answer_index を 1（誤りの文）にしてください。
 - 解説は要点を絞って2〜3文で簡潔に。
-- 資料の文章量が少ない場合は、同じ記述でも着眼点（数値・部位・対比・順序・適応など）を変えて、必ず3問作成してください。
+- 資料の文章量が少ない場合は、同じ記述でも着眼点（数値・部位・対比・順序・適応など）を変えて、必ず{n}問作成してください。
 - すでに出題した問題と文意が重なるものは作らないでください。
 {avoid_block}
 
@@ -435,12 +418,26 @@ def generate_quiz_via_ai(domain, sub_domain, difficulty, avoid, attempts=3):
 {source_text}
 """
 
+
+def generate_quiz_core(api_key, domain, sub_domain, difficulty,
+                       source_text, avoid_keys, avoid_questions,
+                       n=3, attempts=3):
+    """問題セットを作る純粋な処理。成功なら (問題リスト, "")、失敗なら ([], 理由)。
+
+    ★この関数は st.* を使わないため、バックグラウンドスレッドから安全に呼べる。
+    """
+    if source_text == "準備中":
+        return [], "資料ファイルが見つかりません。"
+    if not api_key:
+        return [], "GEMINI_API_KEY が設定されていません（Streamlit の Secrets を確認してください）。"
+
+    prompt = build_prompt(domain, sub_domain, difficulty, source_text, avoid_questions, n=n)
+
     last_error = ""
     for i in range(attempts):
         try:
-            raw = _call_gemini(prompt)
-            items = coerce_quiz_items(raw)
-            items = drop_already_asked(items, avoid)
+            raw = _call_gemini(api_key, prompt)
+            items = drop_already_asked(coerce_quiz_items(raw), avoid_keys)
             if items:
                 return items, ""
             last_error = "AIの応答から有効な問題を取り出せませんでした（重複のみ、または形式不正）。"
@@ -451,8 +448,182 @@ def generate_quiz_via_ai(domain, sub_domain, difficulty, avoid, attempts=3):
     return [], last_error
 
 
-# --- 次の問題を決める -------------------------------------------------------
-POOL_TOPUP_THRESHOLD = 1   # プールがこれ以下になったら先に作り足す
+# ==========================================
+# 3-B. セッション管理・バックグラウンド先読み
+# ==========================================
+DEFAULTS = {
+    "current_question": None,
+    "answered": False,
+    "student_id": "",
+    "is_correct": False,
+    "question_pool": [],
+    "used_pre_made": [],
+    "asked_questions": [],   # 重複出題を避けるための出題履歴（AI生成分も含む）
+    "last_settings": {},
+    "q_key": 0,
+    "last_ai_error": "",     # 失敗理由を画面に出せるように保持
+    "pending_next": False,
+}
+for _k, _v in DEFAULTS.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+# 先読みの目標在庫。ストックがこれ以下になったら裏で作り足す。
+PREFETCH_LOW = 3
+# 1回の裏生成で作る問題数
+PREFETCH_BATCH = 3
+# ストックの上限（これ以上は作らない＝APIの無駄打ちを防ぐ）
+PREFETCH_MAX = 9
+
+
+def get_prefetch_box():
+    """バックグラウンドスレッドとメインスレッドが共有する箱。
+
+    ★重要: スレッドは st.session_state に触れない（ScriptRunContext が無いため）。
+    代わりに、ここで作った「ただの dict」への参照をスレッドに渡し、
+    スレッドはその dict だけを書き換える。dict は session_state が
+    保持しているので、次の再実行でメインスレッドから中身を回収できる。
+    """
+    if "prefetch" not in st.session_state:
+        st.session_state.prefetch = {
+            "lock": threading.Lock(),
+            "items": [],      # 出来上がった問題の受け渡し場所
+            "error": "",      # 失敗理由
+            "running": False,  # 生成中フラグ（二重起動の防止）
+            "epoch": 0,       # 設定世代。変わったら古い結果は捨てる
+            "started_at": 0.0,
+        }
+    return st.session_state.prefetch
+
+
+def _prefetch_worker(box, epoch, api_key, domain, sub_domain, difficulty,
+                     source_text, avoid_keys, avoid_questions):
+    """バックグラウンドで問題を作り、box に入れるだけのワーカー。
+
+    この関数の中では Streamlit の API を一切呼ばないこと。
+    """
+    try:
+        items, error = generate_quiz_core(
+            api_key, domain, sub_domain, difficulty,
+            source_text, avoid_keys, avoid_questions,
+            n=PREFETCH_BATCH,
+        )
+    except Exception as e:
+        items, error = [], f"{type(e).__name__}: {e}"
+
+    with box["lock"]:
+        # 出題範囲などが切り替わっていたら、この結果はもう使わない
+        if box["epoch"] == epoch:
+            box["items"].extend(items)
+            box["error"] = error
+        box["running"] = False
+
+
+def harvest_prefetch():
+    """裏で出来上がった問題をストックへ回収する（メインスレッドで毎回呼ぶ）。"""
+    box = get_prefetch_box()
+    with box["lock"]:
+        got = box["items"]
+        box["items"] = []
+        error = box["error"]
+        box["error"] = ""
+
+    if got:
+        # 出題済み・ストック内と重複しないものだけ採用する
+        seen = {normalize_text(q) for q in st.session_state.asked_questions}
+        seen |= {normalize_text(q["question"]) for q in st.session_state.question_pool}
+        for item in got:
+            key = normalize_text(item["question"])
+            if key in seen:
+                continue
+            seen.add(key)
+            st.session_state.question_pool.append(item)
+
+    if error and not got:
+        st.session_state.last_ai_error = error
+    elif got:
+        st.session_state.last_ai_error = ""
+
+
+def is_prefetching():
+    box = get_prefetch_box()
+    with box["lock"]:
+        return box["running"]
+
+
+def maybe_start_prefetch(domain, sub_domain, difficulty):
+    """ストックが少なければ、裏で問題の作成を始める（待たずにすぐ返る）。
+
+    学生が今の問題を読んで回答している数十秒の間に生成が終わるため、
+    次の問題へ進むときにローディングが出なくなる。
+    """
+    if not GEMINI_API_KEY:
+        return
+    source_text = build_source_text(domain, sub_domain)
+    if source_text == "準備中":
+        return
+
+    box = get_prefetch_box()
+    with box["lock"]:
+        if box["running"]:
+            return
+        if len(st.session_state.question_pool) + len(box["items"]) > PREFETCH_LOW:
+            return
+        if len(st.session_state.question_pool) >= PREFETCH_MAX:
+            return
+        box["running"] = True
+        box["started_at"] = time.time()
+        epoch = box["epoch"]
+
+    avoid_questions = list(st.session_state.asked_questions)
+    avoid_keys = [normalize_text(q) for q in avoid_questions]
+    avoid_keys += [normalize_text(q["question"]) for q in st.session_state.question_pool]
+
+    thread = threading.Thread(
+        target=_prefetch_worker,
+        args=(box, epoch, GEMINI_API_KEY, domain, sub_domain, difficulty,
+              source_text, avoid_keys, avoid_questions),
+        daemon=True,
+    )
+    thread.start()
+
+
+def wait_for_prefetch(timeout=30):
+    """ストックが切れていて裏生成が走っている場合だけ、完了を待つ。"""
+    box = get_prefetch_box()
+    with box["lock"]:
+        if not box["running"]:
+            return
+    with st.spinner("AIが問題を作成中です...（まもなく表示されます）"):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            with box["lock"]:
+                done = (not box["running"]) or bool(box["items"])
+            if done:
+                break
+            time.sleep(0.25)
+    harvest_prefetch()
+
+
+def reset_for_new_settings(current_settings):
+    """出題範囲などが変わったら、ストックと履歴をリセットする。"""
+    st.session_state.question_pool = []
+    st.session_state.used_pre_made = []
+    st.session_state.asked_questions = []
+    st.session_state.last_settings = current_settings
+    box = get_prefetch_box()
+    with box["lock"]:
+        box["epoch"] += 1     # 走っている生成の結果は破棄される
+        box["items"] = []
+        box["error"] = ""
+
+
+def _set_question(q):
+    st.session_state.current_question = q
+    st.session_state.answered = False
+    st.session_state.is_correct = False
+    st.session_state.q_key += 1
+    st.session_state.asked_questions.append(q["question"])
 
 
 def advance_to_next_question(domain, sub_domain, difficulty):
@@ -462,13 +633,6 @@ def advance_to_next_question(domain, sub_domain, difficulty):
     生成に失敗すると画面が空になり、そこから復帰できなかった。
     ここでは「新しい問題が用意できたときだけ」画面を差し替える。
     """
-    current_settings = {"domain": domain, "sub_domain": sub_domain, "difficulty": difficulty}
-    if st.session_state.last_settings != current_settings:
-        st.session_state.question_pool = []
-        st.session_state.used_pre_made = []
-        st.session_state.asked_questions = []
-        st.session_state.last_settings = current_settings
-
     # (1) 事前作成問題が残っていればそれを使う（待ち時間ゼロ）
     available_pre_made = [
         q for q in PRE_MADE_QUESTIONS
@@ -486,33 +650,34 @@ def advance_to_next_question(domain, sub_domain, difficulty):
         })
         return True, ""
 
-    # (2) プールが少なければAIで作り足す
-    error = ""
-    if len(st.session_state.question_pool) <= POOL_TOPUP_THRESHOLD:
-        with st.spinner("AIが新しい問題セットを作成中...（数秒かかります）"):
-            new_items, error = generate_quiz_via_ai(
-                domain, sub_domain, difficulty,
-                avoid=[normalize_text(q) for q in st.session_state.asked_questions],
-            )
-        if new_items:
-            st.session_state.question_pool.extend(new_items)
-            st.session_state.last_ai_error = ""
-        else:
-            st.session_state.last_ai_error = error
+    # (2) 裏で出来ているものを回収
+    harvest_prefetch()
 
-    # (3) プールから出題。空なら今の問題を残したままエラーだけ返す。
+    # (3) ストックが空のときだけ待つ（通常はここに来ない）
+    if not st.session_state.question_pool:
+        if is_prefetching():
+            wait_for_prefetch()
+        else:
+            # 裏生成が走っていない＝起動直後や前回失敗時。ここは同期で作る。
+            source_text = build_source_text(domain, sub_domain)
+            with st.spinner("AIが新しい問題セットを作成中..."):
+                avoid_questions = list(st.session_state.asked_questions)
+                items, error = generate_quiz_core(
+                    GEMINI_API_KEY, domain, sub_domain, difficulty, source_text,
+                    [normalize_text(q) for q in avoid_questions], avoid_questions,
+                    n=PREFETCH_BATCH,
+                )
+            if items:
+                st.session_state.question_pool.extend(items)
+                st.session_state.last_ai_error = ""
+            else:
+                st.session_state.last_ai_error = error
+
+    # (4) ストックから出題。空なら今の問題を残したままエラーだけ返す。
     if st.session_state.question_pool:
         _set_question(st.session_state.question_pool.pop(0))
         return True, ""
-    return False, error or st.session_state.last_ai_error
-
-
-def _set_question(q):
-    st.session_state.current_question = q
-    st.session_state.answered = False
-    st.session_state.is_correct = False
-    st.session_state.q_key += 1
-    st.session_state.asked_questions.append(q["question"])
+    return False, st.session_state.last_ai_error
 
 
 # ==========================================
@@ -520,8 +685,8 @@ def _set_question(q):
 # ==========================================
 mode = st.sidebar.radio("モード選択", ["学生用（クイズ演習）", "管理者用（モニタリング）"])
 
-if st.session_state.resolved_model:
-    st.sidebar.caption(f"使用モデル: {st.session_state.resolved_model}")
+if RESOLVED_MODEL["name"]:
+    st.sidebar.caption(f"使用モデル: {RESOLVED_MODEL['name']}")
 if not DB_AVAILABLE:
     st.sidebar.warning("成績の保存先（Firebase）に接続できていません。")
 
@@ -593,6 +758,17 @@ if mode == "学生用（クイズ演習）":
         st.write("")
         next_clicked = st.button("次の問題を生成する 🎲", use_container_width=True)
 
+    # --- ここが先読みの中枢 -------------------------------------------------
+    # 設定が変わっていたらリセット、そのうえで毎回「回収 → 必要なら裏で開始」。
+    # 画面が描かれるたびに呼ばれるので、学生が問題を読んでいる間も
+    # 裏で次のセットが作られていく。
+    current_settings = {"domain": domain, "sub_domain": sub_domain, "difficulty": difficulty}
+    if st.session_state.last_settings != current_settings:
+        reset_for_new_settings(current_settings)
+    harvest_prefetch()
+    maybe_start_prefetch(domain, sub_domain, difficulty)
+    # ----------------------------------------------------------------------
+
     # 解説の下の「次の問題へ」ボタンからも同じ処理を呼べるようにする
     if st.session_state.pending_next:
         st.session_state.pending_next = False
@@ -603,6 +779,8 @@ if mode == "学生用（クイズ演習）":
             st.error("この領域の問題は現在準備中です。別の領域を選択してください。")
         else:
             ok, err = advance_to_next_question(domain, sub_domain, difficulty)
+            # 出題した直後にも、次のストックを裏で作り始める
+            maybe_start_prefetch(domain, sub_domain, difficulty)
             if not ok:
                 st.error("⚠️ 新しい問題を作成できませんでした。もう一度お試しください。")
                 with st.expander("詳細（担当者向け）"):
@@ -659,14 +837,25 @@ if mode == "学生用（クイズ演習）":
             st.info(f"**【解説】**\n{q.get('explanation', '')}")
             st.write("---")
 
-            pool_count = len(st.session_state.question_pool)
             if st.button("次の問題へ ➡️", type="primary"):
                 st.session_state.pending_next = True
                 st.rerun()
-            if pool_count > 0:
-                st.caption(f"あと {pool_count} 問は【待ち時間ゼロ】で即座に出題されます。")
+
+            # ストック状況の表示（裏で作成中かどうかも分かるようにする）
+            pool_count = len(st.session_state.question_pool)
+            pre_made_left = len([
+                q2 for q2 in PRE_MADE_QUESTIONS
+                if (sub_domain == "すべて" or q2.get("sub_domain") == sub_domain)
+                and q2["question"] not in st.session_state.used_pre_made
+            ])
+            stock = pool_count + pre_made_left
+            if stock > 0:
+                note = f"ストック {stock} 問：待ち時間ゼロで出題されます。"
             else:
-                st.caption("次は新しい問題セットを作成するため数秒かかります。")
+                note = "次の問題を準備しています。"
+            if is_prefetching():
+                note += " 🔄 裏で次のセットを作成中…"
+            st.caption(note)
 
 elif mode == "管理者用（モニタリング）":
     st.title("📊 学生モニタリングダッシュボード")
