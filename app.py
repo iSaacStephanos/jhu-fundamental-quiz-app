@@ -117,11 +117,25 @@ def get_next_total_goal(total_answers):
 # ==========================================
 # 3. 資料（知識データベース）
 # ==========================================
+AVAILABLE_DOMAINS = [
+    "呼吸器系のフィジカルアセスメント",
+    "循環器系のフィジカルアセスメント",
+    "脳神経系のフィジカルアセスメント",
+    "筋骨格系のフィジカルアセスメント",
+    "消化器系のフィジカルアセスメント",
+    "看護過程",
+]
+
 FILE_MAP = {
     "呼吸器系のフィジカルアセスメント": "kokyu.txt",
     "循環器系のフィジカルアセスメント": "junkanki.txt",
+    "脳神経系のフィジカルアセスメント": "noushinkei.txt",
+    "筋骨格系のフィジカルアセスメント": "kinkokkaku.txt",
+    "消化器系のフィジカルアセスメント": "shokaki.txt",
+    "看護過程": "kangokatei.txt",
 }
 
+# 各テキストファイルの【番号. 見出し】と出題範囲の対応
 SECTION_MAP = {
     "呼吸器系のフィジカルアセスメント": {
         "解剖・生理": [1, 2],
@@ -131,20 +145,14 @@ SECTION_MAP = {
         "聴診": [8],
     },
     "循環器系のフィジカルアセスメント": {
-        "解剖・生理": [1, 2],
-        "刺激伝導系と心電図": [3],
-        "問診・視診・触診": [4, 5],
-        "聴診": [6],
-        "末梢動脈・静脈": [7],
-        "浮腫と心不全": [8],
+        "解剖・生理": [1],
+        "刺激伝導系と心電図": [2],
+        "問診・視診・触診": [3, 4],
+        "聴診": [5],
+        "末梢動脈・静脈": [6, 7],
+        "浮腫と心不全": [8, 9],
     },
 }
-
-AVAILABLE_DOMAINS = [
-    "呼吸器系のフィジカルアセスメント",
-    "循環器系のフィジカルアセスメント",
-    "脳神経系のフィジカルアセスメント",
-]
 
 SUB_DOMAINS = {
     "呼吸器系のフィジカルアセスメント":
@@ -205,30 +213,50 @@ def build_source_text(domain, sub_domain):
 
 
 # ==========================================
-# 4. 初期問題（バンクへの取り込み用・DB障害時のフォールバック）
+# 4. 初期問題（バンクへの自動取り込み用・DB障害時のフォールバック）
 # ==========================================
 SEED_QUESTIONS = [
-    {"sub_domain": "解剖・生理", "question": "右主気管支は左主気管支よりも細く長いため、誤嚥性肺炎は左肺に起こりやすい。", "options": ["○", "×"], "answer_index": 1, "explanation": "右主気管支の方が「太く短く」、分岐角度が小さい（約25度）ため、誤嚥したものは右に入りやすく、誤嚥性肺炎は右肺に起こりやすいです。"},
-    {"sub_domain": "解剖・生理", "question": "腹式呼吸は安静時の呼吸の大部分を担い、胸式呼吸よりも1回換気量が多くなる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。横隔膜の収縮による腹式呼吸は安静時の主な呼吸であり、胸式呼吸よりも多くの換気量を得られます。"},
-    {"sub_domain": "解剖・生理", "question": "背面から見える肺の大部分は上葉であるため、背部の観察では上葉を意識することが重要である。", "options": ["○", "×"], "answer_index": 1, "explanation": "背面から見える肺の大部分は「下葉」です。そのため、背部の聴診や打診では主に下葉の状態を観察しています。"},
-    {"sub_domain": "解剖・生理", "question": "PaO2（動脈血酸素分圧）が60Torr以下、またはSpO2が約90%の状態は呼吸不全を意味する。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。PaO2の基準値は80〜100Torrであり、60Torrを下回る（SpO2約90%以下）と呼吸不全と定義されます。"},
-    {"sub_domain": "体表解剖", "question": "胸骨角（ルイ角）は第1肋骨の付着部であり、肋骨・肋間を数える起点となる。", "options": ["○", "×"], "answer_index": 1, "explanation": "胸骨角は「第2肋骨」の付着部です。第1肋骨は鎖骨の下にあり触れないため、ここを起点として肋骨を数えます。"},
-    {"sub_domain": "体表解剖", "question": "前面の基準線は、胸骨中線・胸骨線・鎖骨中線の3つである。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。これらを基準線として、肋骨や肋間の番号と組み合わせて部位を表現します。"},
-    {"sub_domain": "体表解剖", "question": "首を前に曲げたときに最も突出するのは、第1胸椎棘突起である。", "options": ["○", "×"], "answer_index": 1, "explanation": "最も突出するのは「第7頸椎棘突起」です。そのすぐ下が第1胸椎になります。"},
-    {"sub_domain": "体表解剖", "question": "気管分岐部は、背面から見ると第4胸椎棘突起の高さに位置している。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。前面では胸骨角の高さ、背面では第4胸椎棘突起の高さが気管分岐部の目安となります。"},
-    {"sub_domain": "体表解剖", "question": "肺尖部は鎖骨内側1/3より上方約3cmの位置にある。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。肺の頂上部分は鎖骨よりも上に飛び出しているため、鎖骨上窩の聴診も重要になります。"},
-    {"sub_domain": "問診・視診", "question": "起座呼吸は、横になると苦しく座ると楽になる状態で、心不全や喘息などが原因で起こる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。心不全などで肺にうっ血がある場合、横になると静脈還流量が増えて呼吸が苦しくなるため、起き上がることで呼吸を楽にしようとします。"},
-    {"sub_domain": "問診・視診", "question": "チェーンストークス呼吸は、深く大きな規則的な呼吸が続く異常呼吸であり、糖尿病性ケトアシドーシスでみられる。", "options": ["○", "×"], "answer_index": 1, "explanation": "それは「クスマウル呼吸」の説明です。チェーンストークス呼吸は、無呼吸と深浅の周期を繰り返す呼吸で、心不全や脳障害などでみられます。"},
-    {"sub_domain": "問診・視診", "question": "チアノーゼは口唇や爪床が青紫色になるサインであるが、貧血の患者では現れにくい。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。チアノーゼは還元ヘモグロビンが一定量以上増えることで現れるため、もともとヘモグロビンが少ない貧血状態では出現しにくくなります。"},
-    {"sub_domain": "触診・打診", "question": "背部での胸郭の可動性の触診において、正常であれば深吸気時に左右の母指の間は約4cm広がる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。第10肋骨付近で左右の母指を合わせ、深吸気で対称に約4cm広がるのが正常な所見です。"},
-    {"sub_domain": "触診・打診", "question": "正常な肺野を打診すると、鈍くつまったような濁音が聴こえる。", "options": ["○", "×"], "answer_index": 1, "explanation": "正常な肺野は空気を多く含むため、響きのある低い「共鳴音（清音）」が聴こえます。濁音は肺炎や胸水貯留などで聴こえます。"},
-    {"sub_domain": "聴診", "question": "捻髪音（細かい断続性副雑音）は「ブクブク」と聴こえ、気道内に分泌物が溜まっている状態で聴取される。", "options": ["○", "×"], "answer_index": 1, "explanation": "分泌物が溜まっている状態で聴こえる「ブクブク」という音は「水泡音（粗い断続性副雑音）」です。捻髪音は「パリパリ」と聴こえ、間質性肺炎などで聴取されます。"},
-    {"sub_domain": "聴診", "question": "ストライダーは吸気時に聴こえる高調性の「ゼーゼー」という音で、上気道の狭窄を示す緊急所見である。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。喉頭浮腫や気道異物などによる上気道の狭窄を示しており、窒息の恐れがあるため迅速な対応が必要です。"},
-    {"sub_domain": "聴診", "question": "呼吸音の聴診は、低音を聴き取るためベル型聴診器を皮膚に軽く当てて行う。", "options": ["○", "×"], "answer_index": 1, "explanation": "呼吸音は高音であるため「膜型聴診器」を使用します。また、皮膚に跡が残るくらいの強さでしっかりと押し当てて聴診します。"},
-    {"sub_domain": "聴診", "question": "正常な肺胞呼吸音は、大きく高い音であり、吸気と呼気の間に休止期（ポーズ）が聴取される。", "options": ["○", "×"], "answer_index": 1, "explanation": "大きく高く、ポーズがあるのは「気管呼吸音」です。肺胞呼吸音は柔らかく低い音で、呼気は初期のみ聴こえます。"},
-    {"sub_domain": "聴診", "question": "COPDや気管支喘息の患者では、気道の狭窄により「呼気延長」が聴取されることがある。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。気道が狭くなる疾患（COPDや気管支喘息など）では、息を吐き出すのに時間がかかるため呼気が延長します。"},
+    # --- 呼吸器系のフィジカルアセスメント（19問） ---
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "解剖・生理", "question": "右主気管支は左主気管支よりも細く長いため、誤嚥性肺炎は左肺に起こりやすい。", "options": ["○", "×"], "answer_index": 1, "explanation": "右主気管支の方が「太く短く」、分岐角度が小さい（約25度）ため、誤嚥したものは右に入りやすく、誤嚥性肺炎は右肺に起こりやすいです。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "解剖・生理", "question": "腹式呼吸は安静時の呼吸の大部分を担い、胸式呼吸よりも1回換気量が多くなる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。横隔膜の収縮による腹式呼吸は安静時の主な呼吸であり、胸式呼吸よりも多くの換気量を得られます。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "解剖・生理", "question": "背面から見える肺の大部分は上葉であるため、背部の観察では上葉を意識することが重要である。", "options": ["○", "×"], "answer_index": 1, "explanation": "背面から見える肺の大部分は「下葉」です。そのため、背部の聴診や打診では主に下葉の状態を観察しています。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "解剖・生理", "question": "PaO2（動脈血酸素分圧）が60Torr以下、またはSpO2が約90%の状態は呼吸不全を意味する。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。PaO2の基準値は80〜100Torrであり、60Torrを下回る（SpO2約90%以下）と呼吸不全と定義されます。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "体表解剖", "question": "胸骨角（ルイ角）は第1肋骨の付着部であり、肋骨・肋間を数える起点となる。", "options": ["○", "×"], "answer_index": 1, "explanation": "胸骨角は「第2肋骨」の付着部です。第1肋骨は鎖骨の下にあり触れないため、ここを起点として肋骨を数えます。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "体表解剖", "question": "前面の基準線は、胸骨中線・胸骨線・鎖骨中線の3つである。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。これらを基準線として、肋骨や肋間の番号と組み合わせて部位を表現します。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "体表解剖", "question": "首を前に曲げたときに最も突出するのは、第1胸椎棘突起である。", "options": ["○", "×"], "answer_index": 1, "explanation": "最も突出するのは「第7頸椎棘突起」です。そのすぐ下が第1胸椎になります。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "体表解剖", "question": "気管分岐部は、背面から見ると第4胸椎棘突起の高さに位置している。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。前面では胸骨角の高さ、背面では第4胸椎棘突起の高さが気管分岐部の目安となります。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "体表解剖", "question": "肺尖部は鎖骨内側1/3より上方約3cmの位置にある。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。肺の頂上部分は鎖骨よりも上に飛び出しているため、鎖骨上窩の聴診も重要になります。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "問診・視診", "question": "起座呼吸は、横になると苦しく座ると楽になる状態で、心不全や喘息などが原因で起こる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。心不全などで肺にうっ血がある場合、横になると静脈還流量が増えて呼吸が苦しくなるため、起き上がることで呼吸を楽にしようとします。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "問診・視診", "question": "チェーンストークス呼吸は、深く大きな規則的な呼吸が続く異常呼吸であり、糖尿病性ケトアシドーシスでみられる。", "options": ["○", "×"], "answer_index": 1, "explanation": "それは「クスマウル呼吸」の説明です。チェーンストークス呼吸は、無呼吸と深浅の周期を繰り返す呼吸で、心不全や脳障害などでみられます。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "問診・視診", "question": "チアノーゼは口唇や爪床が青紫色になるサインであるが、貧血の患者では現れにくい。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。チアノーゼは還元ヘモグロビンが一定量以上増えることで現れるため、もともとヘモグロビンが少ない貧血状態では出現しにくくなります。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "触診・打診", "question": "背部での胸郭の可動性の触診において、正常であれば深吸気時に左右の母指の間は約4cm広がる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。第10肋骨付近で左右の母指を合わせ、深吸気で対称に約4cm広がるのが正常な所見です。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "触診・打診", "question": "正常な肺野を打診すると、鈍くつまったような濁音が聴こえる。", "options": ["○", "×"], "answer_index": 1, "explanation": "正常な肺野は空気を多く含むため、響きのある低い「共鳴音（清音）」が聴こえます。濁音は肺炎や胸水貯留などで聴こえます。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "捻髪音（細かい断続性副雑音）は「ブクブク」と聴こえ、気道内に分泌物が溜まっている状態で聴取される。", "options": ["○", "×"], "answer_index": 1, "explanation": "分泌物が溜まっている状態で聴こえる「ブクブク」という音は「水泡音（粗い断続性副雑音）」です。捻髪音は「パリパリ」と聴こえ、間質性肺炎などで聴取されます。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "ストライダーは吸気時に聴こえる高調性の「ゼーゼー」という音で、上気道の狭窄を示す緊急所見である。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。喉頭浮腫や気道異物などによる上気道の狭窄を示しており、窒息の恐れがあるため迅速な対応が必要です。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "呼吸音の聴診は、低音を聴き取るためベル型聴診器を皮膚に軽く当てて行う。", "options": ["○", "×"], "answer_index": 1, "explanation": "呼吸音は高音であるため「膜型聴診器」を使用します。また、皮膚に跡が残るくらいの強さでしっかりと押し当てて聴診します。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "正常な肺胞呼吸音は、大きく高い音であり、吸気と呼気の間に休止期（ポーズ）が聴取される。", "options": ["○", "×"], "answer_index": 1, "explanation": "大きく高く、ポーズがあるのは「気管呼吸音」です。肺胞呼吸音は柔らかく低い音で、呼気は初期のみ聴こえます。"},
+    {"domain": "呼吸器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "COPDや気管支喘息の患者では、気道の狭窄により「呼気延長」が聴取されることがある。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。気道が狭くなる疾患（COPDや気管支喘息など）では、息を吐き出すのに時間がかかるため呼気が延長します。"},
+
+    # --- 循環器系のフィジカルアセスメント（18問） ---
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "解剖・生理", "question": "心房と心室の間にある房室弁は、右心系が僧帽弁、左心系が三尖弁である。", "options": ["○", "×"], "answer_index": 1, "explanation": "右心系の房室弁は「三尖弁」、左心系の房室弁は「僧帽弁」です。弁は血液の逆流を防いでいます。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "解剖・生理", "question": "肺動脈には静脈血が流れ、肺静脈には動脈血が流れる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。右心室から肺へ向かう肺動脈には酸素の少ない静脈血が流れ、肺でガス交換された後の肺静脈には酸素の多い動脈血が流れます。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "解剖・生理", "question": "頸静脈（内頸・外頸静脈）は右心房に直接つながっており、右心系の状態を反映する。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。一方、頸動脈（総頸動脈）は左心系の状態を反映し、急変時の循環確認にも用いられます。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "刺激伝導系と心電図", "question": "心臓のペースメーカーである洞結節は左心房に位置し、ここで電気刺激が規則正しく発生する。", "options": ["○", "×"], "answer_index": 1, "explanation": "洞結節は「右心房」にあります。洞結節→房室結節→ヒス束→左脚・右脚→プルキンエ線維→心室筋の順に電気刺激が伝わります。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "刺激伝導系と心電図", "question": "心電図の基本波形において、P波は心房の興奮（収縮）を、QRS波は心室の興奮（収縮）を意味する。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。T波は心室の興奮からの回復を意味し、1拍ごとにP→QRS→Tの順に繰り返します。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "刺激伝導系と心電図", "question": "モニター心電図は10個の電極を用いて12通りの方向から記録し、心筋梗塞の診断を主な目的とする。", "options": ["○", "×"], "answer_index": 1, "explanation": "それは「12誘導心電図」の説明です。モニター心電図は3個の電極で主に第Ⅱ誘導を長時間・連続記録し、急変の早期発見を目的とします。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "問診・視診・触診", "question": "心尖拍動は心尖部を「手掌と指腹」で触れ、振戦（スリル）は4つの弁の領域を「指のつけ根」で触れる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。触診の前には目的と方法を説明して同意を得て、手を温めておきます。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "問診・視診・触診", "question": "心尖拍動の正常な位置は胸骨中線左側10cm以内であり、範囲は2cm以内（示指先端くらい）である。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。心不全などで左心室が拡大すると、心尖拍動は左方（10cm以上）へ移動し、範囲も2cm以上に広がります。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "問診・視診・触診", "question": "仰臥位で心尖拍動が触れにくいときは、患者を右側臥位にすると触れやすくなる。", "options": ["○", "×"], "answer_index": 1, "explanation": "仰臥位で触れにくいときは「左側臥位」にします。心臓が胸壁に近づくため拍動を触れやすくなります。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "心音のⅠ音は僧帽弁・三尖弁（房室弁）が閉じる音であり、収縮期の始まりを示す。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。Ⅱ音は大動脈弁・肺動脈弁（動脈弁）が閉じる音で、拡張期の始まりを示します。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "心音の聴診部位において、僧帽弁領域（心尖部）は第2肋間胸骨右縁である。", "options": ["○", "×"], "answer_index": 1, "explanation": "第2肋間胸骨右縁は「大動脈弁領域」です。僧帽弁領域（心尖部）は「第5肋間左鎖骨中線」です。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "聴診", "question": "心雑音の大きさを6段階で表すLevine（レバイン）分類では、Ⅳ度以上で振戦（スリル）を伴う。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。振戦とは強い心雑音による胸壁の振動であり、LevineⅣ度以上で触知されます。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "末梢動脈・静脈", "question": "中心性チアノーゼは四肢末端のみに出現し、酸素投与では改善しない。", "options": ["○", "×"], "answer_index": 1, "explanation": "中心性チアノーゼは全身や口腔粘膜にも出現し、酸素投与で改善することがあります。四肢末端や顔面のみに出るのは末梢性チアノーゼです。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "末梢動脈・静脈", "question": "爪床圧迫テスト（CRT）は、爪床を圧迫して解除した後、赤みが2秒以内に戻れば正常である。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。戻るまでに2秒以上かかる場合はショックや脱水などの末梢循環不全を疑います。なお、アレンテストの正常目安は5秒以内です。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "末梢動脈・静脈", "question": "Homans（ホーマンズ）徴候は下肢の深部静脈血栓症（DVT）の検査であり、足関節を背屈させて腓腹部に疼痛が出れば陽性となる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。ただし陰性でもDVTは否定できないため、下肢の腫脹・疼痛・色調変化など複数の所見を組み合わせて判断します。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "浮腫と心不全", "question": "毛細血管と間質の水分のやりとりにおいて、静水圧は水分を血管内へ引き戻し、膠質浸透圧（アルブミン）は水分を間質へ押し出す。", "options": ["○", "×"], "answer_index": 1, "explanation": "逆です。「静水圧」が水分を血管外（間質）へ押し出し、「膠質浸透圧（アルブミン）」が水分を血管内へ引き戻します。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "浮腫と心不全", "question": "浮腫の触診では、脛骨前面・足背・内果を母指で5秒以上圧迫し、圧痕の深さと戻るまでの時間をみる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。圧痕の深さで1+（2mm）〜4+（8mm）に評価します。浮腫のある皮膚は脆弱なため愛護的に触れます。"},
+    {"domain": "循環器系のフィジカルアセスメント", "sub_domain": "浮腫と心不全", "question": "左心不全では肺うっ血が生じるため、主な症状として呼吸困難や起座呼吸がみられ、聴診では肺の水泡音が聴かれる。", "options": ["○", "×"], "answer_index": 0, "explanation": "その通りです。一方、右心不全では全身の静脈にうっ血（体うっ血）が生じ、下腿の圧痕性浮腫や体重増加などがみられます。"},
 ]
-SEED_DOMAIN = "呼吸器系のフィジカルアセスメント"
 
 
 # ==========================================
@@ -569,10 +597,11 @@ def bank_add(items, domain, sub_domain, difficulty, status="approved", source="a
             continue
         existing.add(qkey)
 
+        target_domain = item.get("domain") or domain
         target_sub = item.get("sub_domain") or sub_domain
         ref = db.collection(QUESTIONS_COLLECTION).document()
         doc_data = {
-            "domain": domain,
+            "domain": target_domain,
             "sub_domain": target_sub,
             "difficulty": difficulty,
             "question": item["question"],
@@ -591,7 +620,6 @@ def bank_add(items, domain, sub_domain, difficulty, status="approved", source="a
 
     if added_docs:
         batch.commit()
-        # DB全体を再取得せずメモリ上のリストに直接追加して高速化
         if st.session_state.get("bank_items") is not None:
             st.session_state.bank_items.extend(added_docs)
         try:
@@ -602,13 +630,15 @@ def bank_add(items, domain, sub_domain, difficulty, status="approved", source="a
 
 
 def ensure_seed_in_bank():
-    """バンクに初期問題がまだ入っていなければ自動で承認済みとして投入する。"""
+    """初期問題（呼吸器・循環器）のうち、まだバンクに無いものがあれば自動で投入する。"""
     if not DB_AVAILABLE or st.session_state.get("seed_checked"):
         return
     st.session_state.seed_checked = True
     bank = fetch_bank()
-    if not bank:
-        bank_add(SEED_QUESTIONS, SEED_DOMAIN, "すべて", DIFFICULTIES[0],
+    existing = {q.get("qkey") for q in bank}
+    missing = [s for s in SEED_QUESTIONS if normalize_text(s["question"]) not in existing]
+    if missing:
+        bank_add(missing, "", "すべて", DIFFICULTIES[0],
                  status="approved", source="premade")
 
 
@@ -866,9 +896,10 @@ def advance_to_next_question(domain, sub_domain, difficulty, seen_ids, user_ref)
     if not DB_AVAILABLE:
         used = set(st.session_state.session_keys)
         left = [s for s in SEED_QUESTIONS
-                if (sub_domain == "すべて" or s["sub_domain"] == sub_domain)
+                if s.get("domain") == domain
+                and (sub_domain == "すべて" or s["sub_domain"] == sub_domain)
                 and normalize_text(s["question"]) not in used]
-        if left and domain == SEED_DOMAIN:
+        if left:
             set_question(random.choice(left))
             start_background_generation(domain, sub_domain, difficulty, n=4)
             return True, ""
@@ -1000,7 +1031,6 @@ if mode == "学生用（クイズ演習）":
     st.session_state.student_id = student_id
     user_ref = db.collection("students").document(student_id) if DB_AVAILABLE else None
 
-    # 学籍番号が変わった初回のみFirestoreから読み込み、以降はセッション内で高速保持する
     if st.session_state.loaded_student_id != student_id or st.session_state.user_data is None:
         base_data = {
             "name": student_name,
@@ -1095,7 +1125,6 @@ if mode == "学生用（クイズ演習）":
                 if choice is None:
                     st.warning("「○」または「×」を選んでから送信してください。")
                 else:
-                    # 送信ボタンを即座に消去し、st.rerun() なしでそのまま下の結果・解説を描画する
                     submit_placeholder.empty()
                     st.session_state.answered = True
                     is_correct = (q["options"].index(choice) == int(q["answer_index"]))
@@ -1125,10 +1154,8 @@ if mode == "学生用（クイズ演習）":
                     user_data["total_title"] = new_total_title
                     user_data["has_title"] = (new_streak_title != "なし" or new_total_title != "なし")
 
-                    # 上部のスコアメトリクスをその場で即時更新
                     render_score_metrics(metrics_placeholder, user_data)
 
-                    # 称号達成時のお祝い表示
                     celebrations = []
                     for threshold, t_name in STREAK_TITLES:
                         if is_correct and new_streak == threshold:
@@ -1148,7 +1175,6 @@ if mode == "学生用（クイズ演習）":
                         except Exception as e:
                             st.warning(f"成績の保存に失敗しました: {type(e).__name__}")
 
-        # ★ else ではなく独立した if にすることで、送信ボタンを押した瞬間に確実に描画される
         if st.session_state.answered:
             if st.session_state.is_correct:
                 st.success("🎉 正解です！")
@@ -1207,12 +1233,13 @@ elif mode == "管理者用（モニタリング）":
         )
         target_status = "approved" if "即時承認" in gen_status_choice else "pending"
 
+        sub_options = [s for s in SUB_DOMAINS.get(g_domain, ["すべて"]) if s != "すべて"]
+        if not sub_options:
+            sub_options = ["すべて"]
+
         col_a, col_b, col_c = st.columns(3)
         with col_a:
-            g_sub = st.selectbox(
-                "出題範囲",
-                [s for s in SUB_DOMAINS.get(g_domain, ["すべて"]) if s != "すべて"],
-                key="bank_sub")
+            g_sub = st.selectbox("出題範囲", sub_options, key="bank_sub")
         with col_b:
             g_diff = st.selectbox("難易度", DIFFICULTIES, key="bank_diff")
         with col_c:
