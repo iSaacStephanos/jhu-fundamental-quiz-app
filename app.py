@@ -4,8 +4,8 @@
 - 問題は Firestore の "questions" コレクション（＝問題バンク）に蓄積する
 - 学生画面はバンクから「未出題の問題」をランダムに読むだけ → 待ち時間ゼロ
 - 出題と同時にバックグラウンドでAIが新作問題を少量ずつ生成し、即時承認（approved / ai-live）
-  としてバンクに自動追加する（事後パトロール方式）。使えば使うほどバンクが自動で増える。
-- 管理者は管理画面からいつでもAI生成問題を事後確認・修正・却下できる。
+  としてバンクに自動追加する（事後パトロール方式）。
+- 回答送信時は st.rerun() を介さず、同一サイクル内で即座に結果と解説を描画する。
 """
 
 import streamlit as st
@@ -122,7 +122,6 @@ FILE_MAP = {
     "循環器系のフィジカルアセスメント": "junkanki.txt",
 }
 
-# 資料内の【見出し】番号と、UI上の「出題範囲」の対応表
 SECTION_MAP = {
     "呼吸器系のフィジカルアセスメント": {
         "解剖・生理": [1, 2],
@@ -237,8 +236,8 @@ SEED_DOMAIN = "呼吸器系のフィジカルアセスメント"
 # ==========================================
 MODEL_PREFERENCE = [
     "gemini-2.5-flash",
-    "gemini-flash-latest",
     "gemini-2.0-flash",
+    "gemini-flash-latest",
     "gemini-1.5-flash",
 ]
 
@@ -308,7 +307,7 @@ def _call_gemini(api_key, prompt):
                 config={
                     "response_mime_type": "application/json",
                     "response_schema": QUIZ_SCHEMA,
-                    "temperature": 1.15,
+                    "temperature": 1.1,
                 },
             )
             text = getattr(resp, "text", None)
@@ -332,7 +331,7 @@ def _call_gemini(api_key, prompt):
                     name,
                     generation_config={
                         "response_mime_type": "application/json",
-                        "temperature": 1.15,
+                        "temperature": 1.1,
                     },
                 )
                 resp = model.generate_content(prompt)
@@ -390,8 +389,19 @@ def coerce_quiz_items(raw):
     for item in data:
         if not isinstance(item, dict):
             continue
-        question = str(item.get("question", "")).strip()
-        explanation = str(item.get("explanation", "")).strip()
+        question = str(
+            item.get("question")
+            or item.get("問題")
+            or item.get("statement")
+            or ""
+        ).strip()
+        explanation = str(
+            item.get("explanation")
+            or item.get("解説")
+            or item.get("reason")
+            or item.get("rationale")
+            or ""
+        ).strip()
         if not question:
             continue
         try:
@@ -404,7 +414,7 @@ def coerce_quiz_items(raw):
             "question": question,
             "options": ["○", "×"],
             "answer_index": idx,
-            "explanation": explanation or "（解説なし）",
+            "explanation": explanation or "資料の記載内容を確認しましょう。",
         })
     return cleaned
 
@@ -440,10 +450,20 @@ def build_prompt(domain, sub_domain, difficulty, source_text, avoid_questions, n
 - 難易度: {difficulty}
 - 選択肢は「○」と「×」の2つで固定です。answer_index は 0（○が正しい）または 1（×が正しい）の整数で答えてください。
 - 正しい文と誤りの文を、おおよそ半分ずつ混ぜてください。
-- 解説は要点を絞って2〜3文で簡潔に。
-- 資料の記述1つから複数問作る場合は、着眼点（数値・部位・左右・対比・順序・適応・原因疾患など）を必ず変えてください。
+- 解説（explanation）は、なぜ○なのか（またはなぜ×なのか）を2〜3文で簡潔に記述してください。
 - 同じ事実を言い換えただけの問題は作らないでください。
 {avoid_block}
+
+【出力フォーマット】（以下のJSON形式のみを出力すること。キー名は必ず question, answer_index, explanation とすること）
+{{
+  "questions": [
+    {{
+      "question": "問題文",
+      "answer_index": 0,
+      "explanation": "解説文"
+    }}
+  ]
+}}
 
 【参考資料】
 {source_text}
@@ -479,9 +499,9 @@ def generate_quiz_core(api_key, domain, sub_domain, difficulty,
 # ==========================================
 # 6. 問題バンク（Firestore）
 # ==========================================
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_bank():
-    """バンクの全問題を読む（120秒キャッシュ・全ユーザー共有）。"""
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_bank_from_db():
+    """Firestoreから全問題を読む（5分キャッシュ）。"""
     if not DB_AVAILABLE:
         return []
     out = []
@@ -492,14 +512,22 @@ def fetch_bank():
     return out
 
 
+def fetch_bank():
+    """セッション内のバンク一覧を返す（追加分も再通信なしで即時反映）。"""
+    if "bank_items" not in st.session_state or st.session_state.bank_items is None:
+        st.session_state.bank_items = list(_fetch_bank_from_db())
+    return st.session_state.bank_items
+
+
 def invalidate_bank():
     try:
-        fetch_bank.clear()
+        _fetch_bank_from_db.clear()
     except Exception:
         pass
+    st.session_state.bank_items = None
 
 
-@st.cache_data(ttl=120, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_settings():
     default = {"allow_live_generation": True}
     if not DB_AVAILABLE:
@@ -524,14 +552,12 @@ def save_settings(values):
 
 
 def bank_add(items, domain, sub_domain, difficulty, status="approved", source="ai"):
-    """問題をバンクに追加する。既存と重複するものは追加しない。
-
-    戻り値: (追加された問題オブジェクトのリスト, 重複で除外した件数)
-    """
+    """問題をバンクに追加する。既存と重複するものは追加しない。"""
     if not DB_AVAILABLE or not items:
         return [], 0
 
-    existing = {q.get("qkey") for q in fetch_bank()}
+    current_bank = fetch_bank()
+    existing = {q.get("qkey") for q in current_bank}
     batch = db.batch()
     added_docs = []
     skipped = 0
@@ -565,14 +591,21 @@ def bank_add(items, domain, sub_domain, difficulty, status="approved", source="a
 
     if added_docs:
         batch.commit()
-        invalidate_bank()
+        # DB全体を再取得せずメモリ上のリストに直接追加して高速化
+        if st.session_state.get("bank_items") is not None:
+            st.session_state.bank_items.extend(added_docs)
+        try:
+            _fetch_bank_from_db.clear()
+        except Exception:
+            pass
     return added_docs, skipped
 
 
 def ensure_seed_in_bank():
     """バンクに初期問題がまだ入っていなければ自動で承認済みとして投入する。"""
-    if not DB_AVAILABLE:
+    if not DB_AVAILABLE or st.session_state.get("seed_checked"):
         return
+    st.session_state.seed_checked = True
     bank = fetch_bank()
     if not bank:
         bank_add(SEED_QUESTIONS, SEED_DOMAIN, "すべて", DIFFICULTIES[0],
@@ -654,14 +687,18 @@ DEFAULTS = {
     "current_question": None,
     "answered": False,
     "student_id": "",
+    "loaded_student_id": "",
+    "user_data": None,
     "is_correct": False,
     "session_seen": [],
     "session_keys": [],
+    "q_counter": 0,
     "fallback_pool": [],
     "last_ai_error": "",
     "pending_next": False,
     "last_settings": {},
-    "celebrate_msgs": [],  # 称号達成時のお祝いメッセージ
+    "bank_items": None,
+    "seed_checked": False,
 }
 for _k, _v in DEFAULTS.items():
     if _k not in st.session_state:
@@ -698,7 +735,6 @@ def _prefetch_worker(box, epoch, api_key, domain, sub_domain, difficulty,
 
 
 def resolve_target_sub_domain(domain, sub_domain):
-    """「すべて」が選ばれている場合は、具体的なサブ領域をランダムに1つ選んで作問させる。"""
     if sub_domain != "すべて":
         return sub_domain
     subs = [s for s in SUB_DOMAINS.get(domain, ["すべて"]) if s != "すべて"]
@@ -739,7 +775,7 @@ def harvest_background():
     """裏で完成した問題を回収し、即時承認（approved / ai-live）としてバンクに登録する。"""
     box = get_prefetch_box()
     with box["lock"]:
-        got = box["items"]
+        got = list(box["items"])
         box["items"] = []
         error = box["error"]
         box["error"] = ""
@@ -754,16 +790,11 @@ def harvest_background():
     if meta and DB_AVAILABLE:
         g_domain, g_sub, g_diff = meta
         try:
-            # ★改善策2: 最初から status="approved" としてバンクに自動追加する
-            added_docs, _ = bank_add(
-                got, g_domain, g_sub, g_diff,
-                status="approved", source="ai-live"
-            )
+            bank_add(got, g_domain, g_sub, g_diff, status="approved", source="ai-live")
             return
         except Exception:
             pass
 
-    # DB未接続時などのフォールバック
     st.session_state.fallback_pool.extend(got)
 
 
@@ -791,16 +822,21 @@ def wait_for_generation(timeout=30):
 def set_question(q, question_id=None, user_ref=None):
     st.session_state.current_question = {
         "question": q["question"],
-        "options": q.get("options") or ["○", "×"],
+        "options": ["○", "×"],
         "answer_index": int(q["answer_index"]),
-        "explanation": q.get("explanation", ""),
+        "explanation": q.get("explanation") or "資料の記載内容を確認しましょう。",
         "id": question_id,
     }
     st.session_state.answered = False
     st.session_state.is_correct = False
+    st.session_state.q_counter += 1
     st.session_state.session_keys.append(normalize_text(q["question"]))
     if question_id:
         st.session_state.session_seen.append(question_id)
+        if st.session_state.user_data is not None:
+            seen_list = st.session_state.user_data.setdefault("seen_ids", [])
+            if question_id not in seen_list:
+                seen_list.append(question_id)
         if user_ref is not None:
             try:
                 user_ref.set(
@@ -810,20 +846,17 @@ def set_question(q, question_id=None, user_ref=None):
 
 
 def advance_to_next_question(domain, sub_domain, difficulty, seen_ids, user_ref):
-    """次の問題を出題する。
-    裏で作られた新問があれば先にバンクへ合流させ、既存問題と混ぜてランダム抽出する。
-    """
+    """次の問題を出題する。"""
     if build_source_text(domain, sub_domain) == "準備中":
         return False, "この領域の問題は現在準備中です。別の領域を選択してください。"
 
-    # (0) 裏で完成しているAI問題があれば回収してバンク（approved）に合流させる
+    # (0) 裏で完成しているAI問題があれば回収してバンクに合流させる
     harvest_background()
 
     # (1) バンク（初期ストック＋AI自動追加分）からランダムに未出題の1問を選ぶ
     q = pick_from_bank(domain, sub_domain, difficulty, seen_ids)
     if q:
         set_question(q, question_id=q["id"], user_ref=user_ref)
-        # ★バンク内の未出題数が30問未満なら、次の問題以降のために裏でAI補充を走らせる
         if fetch_settings().get("allow_live_generation", True):
             if count_unseen(domain, sub_domain, seen_ids) < 30:
                 start_background_generation(domain, sub_domain, difficulty, n=4)
@@ -840,7 +873,7 @@ def advance_to_next_question(domain, sub_domain, difficulty, seen_ids, user_ref)
             start_background_generation(domain, sub_domain, difficulty, n=4)
             return True, ""
 
-    # (3) バンクの未出題が0問の場合 → AI生成（許可されている場合）
+    # (3) バンクの未出題が0問の場合 → AI生成
     settings = fetch_settings()
     if not settings.get("allow_live_generation", True):
         return False, "この範囲の問題をすべて解き終えました。別の範囲を選んでください。"
@@ -854,7 +887,6 @@ def advance_to_next_question(domain, sub_domain, difficulty, seen_ids, user_ref)
             start_background_generation(domain, sub_domain, difficulty, n=4)
             return True, ""
 
-    # まだ裏で動いていなかった場合はその場で生成してバンクに登録する
     target_sub = resolve_target_sub_domain(domain, sub_domain)
     source_text = build_source_text(domain, target_sub)
     bank_qs = [x.get("question", "") for x in
@@ -885,6 +917,45 @@ def advance_to_next_question(domain, sub_domain, difficulty, seen_ids, user_ref)
         return True, ""
 
     return False, st.session_state.last_ai_error or "新しい問題を作成できませんでした。"
+
+
+def request_next_question():
+    """下部ボタン用のコールバック（st.rerun不要で次問フラグを立てる）。"""
+    st.session_state.pending_next = True
+
+
+def render_score_metrics(container, user_data):
+    """スコアと称号バッジを描画・更新する。"""
+    current_streak = user_data.get("current_streak", 0)
+    max_streak = user_data.get("max_streak", 0)
+    total_answers = user_data.get("total_answers", 0)
+
+    streak_title = get_streak_title(max_streak)
+    total_title = get_total_title(total_answers)
+
+    with container.container():
+        m_col1, m_col2 = st.columns(2)
+        with m_col1:
+            st.metric(
+                label=f"現在の連続正解数（最大記録: {max_streak} 問）",
+                value=f"{current_streak} 問",
+                delta=get_next_streak_goal(current_streak),
+            )
+            if streak_title != "なし":
+                st.success(f"**連続正解称号：【{streak_title}】**")
+            else:
+                st.caption("連続正解称号：未獲得（30問連続正解で【🎖️ ルーキー】獲得！）")
+
+        with m_col2:
+            st.metric(
+                label="これまで取り組んだ問題数（総解答数）",
+                value=f"{total_answers} 問",
+                delta=get_next_total_goal(total_answers),
+            )
+            if total_title != "なし":
+                st.info(f"**解答数称号：【{total_title}】**")
+            else:
+                st.caption("解答数称号：未獲得（累計100問解答で【🌱 チャレンジャー】獲得！）")
 
 
 # ==========================================
@@ -927,75 +998,47 @@ if mode == "学生用（クイズ演習）":
         st.stop()
 
     st.session_state.student_id = student_id
+    user_ref = db.collection("students").document(student_id) if DB_AVAILABLE else None
 
-    user_ref = None
-    user_data = {
-        "name": student_name,
-        "current_streak": 0,
-        "max_streak": 0,
-        "has_title": False,
-        "streak_title": "なし",
-        "total_title": "なし",
-        "total_answers": 0,
-        "correct_answers": 0,
-        "seen_ids": [],
-    }
-    if DB_AVAILABLE:
-        try:
-            user_ref = db.collection("students").document(student_id)
-            user_doc = user_ref.get()
-            if user_doc.exists:
-                user_data.update(user_doc.to_dict() or {})
-                if student_name and user_data.get("name") != student_name:
-                    user_data["name"] = student_name
-                    user_ref.set({"name": student_name}, merge=True)
-            else:
-                user_ref.set(user_data)
-        except Exception as e:
-            st.warning(f"成績データの読み込みに失敗しました（演習は継続できます）: {type(e).__name__}")
-            user_ref = None
+    # 学籍番号が変わった初回のみFirestoreから読み込み、以降はセッション内で高速保持する
+    if st.session_state.loaded_student_id != student_id or st.session_state.user_data is None:
+        base_data = {
+            "name": student_name,
+            "current_streak": 0,
+            "max_streak": 0,
+            "has_title": False,
+            "streak_title": "なし",
+            "total_title": "なし",
+            "total_answers": 0,
+            "correct_answers": 0,
+            "seen_ids": [],
+        }
+        if user_ref is not None:
+            try:
+                user_doc = user_ref.get()
+                if user_doc.exists:
+                    base_data.update(user_doc.to_dict() or {})
+                else:
+                    user_ref.set(base_data)
+            except Exception as e:
+                st.warning(f"成績データの読み込みに失敗しました: {type(e).__name__}")
+        st.session_state.user_data = base_data
+        st.session_state.loaded_student_id = student_id
+
+    user_data = st.session_state.user_data
+    if student_name and user_data.get("name") != student_name:
+        user_data["name"] = student_name
+        if user_ref is not None:
+            try:
+                user_ref.set({"name": student_name}, merge=True)
+            except Exception:
+                pass
 
     seen_ids = user_data.get("seen_ids") or []
-    current_streak = user_data.get("current_streak", 0)
-    max_streak = user_data.get("max_streak", 0)
-    total_answers = user_data.get("total_answers", 0)
-
-    streak_title = get_streak_title(max_streak)
-    total_title = get_total_title(total_answers)
-
-    # 称号達成直後のお祝い演出
-    if st.session_state.celebrate_msgs:
-        st.balloons()
-        for msg in st.session_state.celebrate_msgs:
-            st.success(msg)
-        st.session_state.celebrate_msgs = []
 
     st.divider()
-
-    # ★ 称号バッジと進捗メトリクスの2カラム表示
-    m_col1, m_col2 = st.columns(2)
-    with m_col1:
-        st.metric(
-            label=f"現在の連続正解数（最大記録: {max_streak} 問）",
-            value=f"{current_streak} 問",
-            delta=get_next_streak_goal(current_streak),
-        )
-        if streak_title != "なし":
-            st.success(f"**連続正解称号：【{streak_title}】**")
-        else:
-            st.caption("連続正解称号：未獲得（30問連続正解で【🎖️ ルーキー】獲得！）")
-
-    with m_col2:
-        st.metric(
-            label="これまで取り組んだ問題数（総解答数）",
-            value=f"{total_answers} 問",
-            delta=get_next_total_goal(total_answers),
-        )
-        if total_title != "なし":
-            st.info(f"**解答数称号：【{total_title}】**")
-        else:
-            st.caption("解答数称号：未獲得（累計100問解答で【🌱 チャレンジャー】獲得！）")
-
+    metrics_placeholder = st.empty()
+    render_score_metrics(metrics_placeholder, user_data)
     st.divider()
 
     c1, c2, c3, c4 = st.columns([3, 3, 3, 3])
@@ -1035,18 +1078,25 @@ if mode == "学生用（クイズ演習）":
         q = st.session_state.current_question
         st.markdown(f"### Q. {q['question']}")
 
-        is_disabled = st.session_state.answered
         st.markdown("### 選択肢を選んでください：")
-        choice = st.radio("選択肢", q["options"],
-                          key=f"quiz_choice_{len(st.session_state.session_keys)}",
-                          index=None, disabled=is_disabled, horizontal=True,
-                          label_visibility="collapsed")
+        choice = st.radio(
+            "選択肢",
+            q["options"],
+            key=f"quiz_choice_{st.session_state.q_counter}",
+            index=None,
+            disabled=st.session_state.answered,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
 
-        if not is_disabled:
-            if st.button("回答を送信する"):
+        submit_placeholder = st.empty()
+        if not st.session_state.answered:
+            if submit_placeholder.button("回答を送信する", type="primary"):
                 if choice is None:
                     st.warning("「○」または「×」を選んでから送信してください。")
                 else:
+                    # 送信ボタンを即座に消去し、st.rerun() なしでそのまま下の結果・解説を描画する
+                    submit_placeholder.empty()
                     st.session_state.answered = True
                     is_correct = (q["options"].index(choice) == int(q["answer_index"]))
                     st.session_state.is_correct = is_correct
@@ -1067,7 +1117,6 @@ if mode == "学生用（クイズ演習）":
                         new_streak = 0
                         user_data["current_streak"] = 0
 
-                    # ★ 称号ランクアップ判定とお祝いメッセージ登録
                     new_max_streak = user_data.get("max_streak", 0)
                     new_streak_title = get_streak_title(new_max_streak)
                     new_total_title = get_total_title(new_total)
@@ -1076,6 +1125,10 @@ if mode == "学生用（クイズ演習）":
                     user_data["total_title"] = new_total_title
                     user_data["has_title"] = (new_streak_title != "なし" or new_total_title != "なし")
 
+                    # 上部のスコアメトリクスをその場で即時更新
+                    render_score_metrics(metrics_placeholder, user_data)
+
+                    # 称号達成時のお祝い表示
                     celebrations = []
                     for threshold, t_name in STREAK_TITLES:
                         if is_correct and new_streak == threshold:
@@ -1083,12 +1136,10 @@ if mode == "学生用（クイズ演習）":
                     for threshold, t_name in TOTAL_TITLES:
                         if new_total == threshold:
                             celebrations.append(f"🎊 累計 {threshold} 問解答達成！称号【{t_name}】を獲得しました！")
-                    st.session_state.celebrate_msgs = celebrations
-
-                    # 回答したタイミングでも裏側の自動作問をトリガーしておく
-                    if fetch_settings().get("allow_live_generation", True):
-                        if count_unseen(domain, sub_domain, seen_ids) < 30:
-                            start_background_generation(domain, sub_domain, difficulty, n=4)
+                    if celebrations:
+                        st.balloons()
+                        for c_msg in celebrations:
+                            st.success(c_msg)
 
                     if user_ref is not None:
                         try:
@@ -1096,20 +1147,19 @@ if mode == "学生用（クイズ演習）":
                             user_ref.set(payload, merge=True)
                         except Exception as e:
                             st.warning(f"成績の保存に失敗しました: {type(e).__name__}")
-                    st.rerun()
-        else:
+
+        # ★ else ではなく独立した if にすることで、送信ボタンを押した瞬間に確実に描画される
+        if st.session_state.answered:
             if st.session_state.is_correct:
                 st.success("🎉 正解です！")
             else:
                 st.error("❌ 不正解です...")
 
             st.write("---")
-            st.info(f"**【解説】**\n{q.get('explanation', '')}")
+            st.info(f"**【解説】**\n{q.get('explanation') or '資料の記載内容を確認しましょう。'}")
             st.write("---")
 
-            if st.button("次の問題へ ➡️", type="primary"):
-                st.session_state.pending_next = True
-                st.rerun()
+            st.button("次の問題へ ➡️", type="primary", on_click=request_next_question)
 
             unseen = count_unseen(domain, sub_domain, seen_ids)
             if unseen > 0:
@@ -1249,7 +1299,6 @@ elif mode == "管理者用（モニタリング）":
             filtered = [q for q in bank if q.get("status") == "rejected"]
 
         target = [q for q in filtered if r_domain == "すべて" or q.get("domain") == r_domain]
-        # 新しいものが上に来るようにソート
         target.sort(key=lambda x: x.get("created_at", ""), reverse=True)
 
         st.caption(f"該当: {len(target)} 問（新しい順に一度に20問まで表示します）")
@@ -1290,7 +1339,7 @@ elif mode == "管理者用（モニタリング）":
                                 "explanation": new_e,
                                 "qkey": normalize_text(new_q),
                                 "status": "approved",
-                                "source": "verified",  # パトロール済みマーク
+                                "source": "verified",
                             })
                             st.success("保存しました。")
                             st.rerun()
