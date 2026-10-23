@@ -192,8 +192,8 @@ def load_knowledge_base(domain):
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
         
-        # ★ ここでAIの引用タグ 等を自動削除する（バグ修正済）
-        text = re.sub(r"\", "", text)
+        # ★ ここでAIの引用タグ を自動削除する
+        text = re.sub(r"\[cite:[\d\s,]+\]", "", text)
         
         _KB_CACHE[path] = (mtime, text)
         return text
