@@ -191,6 +191,10 @@ def load_knowledge_base(domain):
             return cached[1]
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
+        
+        # ★ ここでAIの引用タグ 等を自動削除する（バグ修正済）
+        text = re.sub(r"\", "", text)
+        
         _KB_CACHE[path] = (mtime, text)
         return text
     except Exception:
@@ -201,17 +205,13 @@ def extract_sections(text, numbers):
     """【1. 〜】形式の見出しで区切られた本文から、指定番号の節だけを取り出す。"""
     if not numbers:
         return text
-    
-    # ★AIの誤作動を防ぐため、 のようなシステム付与タグを事前に消去する
-    clean_text = re.sub(r"\", "", text)
-    
-    parts = re.split(r"(?m)^\s*(?=【\s*\d+\s*\.)", clean_text)
+    parts = re.split(r"(?m)^(?=【\s*\d+\s*\.)", text)
     picked = []
     for part in parts:
-        m = re.match(r"^\s*【\s*(\d+)\s*\.", part)
+        m = re.match(r"^【\s*(\d+)\s*\.", part)
         if m and int(m.group(1)) in numbers:
             picked.append(part.strip())
-    return "\n\n".join(picked) if picked else clean_text
+    return "\n\n".join(picked) if picked else text
 
 
 def build_source_text(domain, sub_domain):
@@ -482,8 +482,8 @@ def build_prompt(domain, sub_domain, difficulty, source_text, avoid_questions, n
             "別の着眼点で作ること）】\n" + listed
         )
 
-    return f"""あなたは優秀な看護教育の専門家です。以下の【参考資料】に記載されている事実のみに基づいて、○×問題（正誤問題）を必ず「{n}問」作成してください。
-外部の知識は絶対に混ぜないでください。
+    return f"""あなたは優秀な看護教育の専門家です。以下の【参考資料】に記載されている事実のみに基づいて、○×問題（正誤問題）を「最大 {n}問」作成してください。
+外部の知識は絶対に混ぜないでください。資料の情報量が少ない場合は無理に {n}問作らなくて構いません。作れる分だけ（2〜3問など）を出力してください。
 
 【条件】
 - 出題領域: {domain}
@@ -492,8 +492,7 @@ def build_prompt(domain, sub_domain, difficulty, source_text, avoid_questions, n
 - 選択肢は「○」と「×」の2つで固定です。answer_index は 0（○が正しい）または 1（×が正しい）の整数で答えてください。
 - 正しい文と誤りの文を、おおよそ半分ずつ混ぜてください。
 - 解説（explanation）は、なぜ○なのか（またはなぜ×なのか）を2〜3文で簡潔に記述してください。
-- 資料の文章量が少ない場合は、同じ記述からでも「主語を入れ替える」「数値を少し変えて×問題にする」「対比させる」など視点を工夫し、必ず{n}問ひねり出してください。
-- 同じ事実を単に言い換えただけの重複問題は作らないでください。
+- 同じ事実を言い換えただけの問題は作らないでください。
 {avoid_block}
 
 【出力フォーマット】（以下のJSON形式のみを出力すること。キー名は必ず question, answer_index, explanation とすること）
@@ -1257,8 +1256,7 @@ elif mode == "管理者用（モニタリング）":
         with col_b:
             g_diff = st.selectbox("難易度", DIFFICULTIES, key="bank_diff")
         with col_c:
-            # ★ AIへの負荷を減らすため、1回あたり5問に変更
-            g_batches = st.number_input("生成回数（1回あたり5問）",
+            g_batches = st.number_input("生成回数（1回あたり最大5問）",
                                         min_value=1, max_value=20, value=2)
 
         if build_source_text(g_domain, g_sub) == "準備中":
@@ -1274,7 +1272,7 @@ elif mode == "管理者用（モニタリング）":
                 items, err = generate_quiz_core(
                     GEMINI_API_KEY, g_domain, g_sub, g_diff,
                     build_source_text(g_domain, g_sub),
-                    [normalize_text(x) for x in bank_qs], bank_qs, n=5, # ★ 5問に変更
+                    [normalize_text(x) for x in bank_qs], bank_qs, n=5,
                 )
                 if items:
                     added_docs, s = bank_add(items, g_domain, g_sub, g_diff,
